@@ -26,17 +26,27 @@ def load_csv(uploader):
     st.error("Failed to decode Student Comments CSV. Check its encoding.")
     return pd.DataFrame()
 
-# — Convert “Project” (e.g. “2025 Summer Term I”) → “2025_01_SU1” etc. —
+# — Convert “Project” (e.g. “Summer Term I”) → “SU1”, “FA2”, etc. —
 def format_term(proj):
-    parts = str(proj).split()               # ["2025","Summer","Term","I"]
+    parts = str(proj).split()               # e.g. ["2025","Summer","Term","I"]
     if len(parts) == 4:
         year, season, _, roman = parts
-        # map roman numerals I, II, III → 1,2,3
-        roman_map = {"I":"1","II":"2","III":"3","IV":"4"}
-        num = roman_map.get(roman, roman)
-        season_map = {"Spring":"SP","Summer":"SU","Fall":"FA","Winter":"WI"}
+        # Map Roman numerals I/II → 1/2
+        roman_map = {"I": "1", "II": "2"}
+        # Map season names → two-letter codes
+        season_map = {
+            "Spring": "SP",
+            "Summer": "SU",
+            "Fall":   "FA",
+            "Winter": "WI"
+        }
+        num  = roman_map.get(roman, roman)
         code = season_map.get(season, season[:2].upper()) + num
+        # Always use section “01” for your scheme
         return f"{year}_01_{code}"
+    # If it’s already in YYYY_SS_TTn format, just return it
+    if proj and str(proj).count("_") == 2:
+        return str(proj)
     return str(proj)
 
 def main():
