@@ -26,28 +26,19 @@ def load_csv(uploader):
     st.error("Failed to decode Student Comments CSV. Check its encoding.")
     return pd.DataFrame()
 
-# — Convert “Project” (e.g. “Summer Term I”) → “SU1”, “FA2”, etc. —
-def format_term(proj):
-    parts = str(proj).split()               # e.g. ["2025","Summer","Term","I"]
-    if len(parts) == 4:
-        year, season, _, roman = parts
-        # Map Roman numerals I/II → 1/2
-        roman_map = {"I": "1", "II": "2"}
-        # Map season names → two-letter codes
-        season_map = {
-            "Spring": "SP",
-            "Summer": "SU",
-            "Fall":   "FA",
-            "Winter": "WI"
-        }
-        num  = roman_map.get(roman, roman)
-        code = season_map.get(season, season[:2].upper()) + num
-        # Always use section “01” for your scheme
-        return f"{year}_01_{code}"
-    # If it’s already in YYYY_SS_TTn format, just return it
-    if proj and str(proj).count("_") == 2:
-        return str(proj)
-    return str(proj)
+# — Build the Term string as YYYY_SS_TTn, with SS from Course UniqueID’s last digit —
+def make_term(project_str, uniqueid):
+    year, season, _, roman = str(project_str).split()
+    # Roman → 1/2
+    roman_map  = {"I": "1", "II": "2"}
+    num         = roman_map.get(roman.upper(), "1")
+    # Season → SP/SU/FA/WI
+    season_map = {"Spring":"SP","Summer":"SU","Fall":"FA","Winter":"WI"}
+    code        = season_map.get(season, season[:2].upper()) + num
+    # Section code based on UniqueID’s last digit
+    last_digit = str(uniqueid).strip()[-1]
+    section    = "01" if last_digit == "0" else "02" if last_digit == "1" else f"0{last_digit}"
+    return f"{year}_{section}_{code}"
 
 def main():
     st.set_page_config(page_title="Append Instructor → Comments", layout="wide")
@@ -66,19 +57,12 @@ def main():
         st.info("2) Then upload your Instructor Report Excel.")
         return
 
-    # — Build new rows from Instructor Report —
-    # A: Term        ← format_term(instr_df['Project'])
-    # B: Course_Code ← first 6 chars of instr_df['Course Code']
-    # C: Course_Name ← f"{Code}_{UniqueID} {Title}"
-    # D: Inst_FName  ← instr_df['Instructor Firstname']
-    # E: Inst_LName  ← instr_df['Instructor Lastname']
-    # F: Question    ← instr_df['QuestionKey']
-    # G: Response    ← instr_df['Comments']
+    # — Build only columns A–G from Instructor Report —
     new = pd.DataFrame({
-        "Term":        instr_df["Project"].map(format_term),
+        "Term":        instr_df.apply(lambda r: make_term(r["Project"], r["Course UniqueID"]), axis=1),
         "Course_Code": instr_df["Course Code"].astype(str).str[:6],
-        "Course_Name": instr_df["Course Code"].astype(str)
-                         + "_"
+        "Course_Name": instr_df["Course Code"].astype(str).str[:6]
+                         + "_" 
                          + instr_df["Course UniqueID"].astype(str)
                          + " "
                          + instr_df["Course Title"].astype(str),
@@ -88,23 +72,23 @@ def main():
         "Response":    instr_df["Comments"].astype(str),
     })
 
-    # — Preserve every other column (blank for new rows) —
+    # — Pad out any extra columns so concat keeps your sheet’s layout —
     for col in comm_df.columns:
         if col not in new.columns:
             new[col] = ""
 
-    # — Append (no in-place edits of original rows) —
+    # — Append without touching the original rows —
     appended = pd.concat([comm_df, new[comm_df.columns]], ignore_index=True)
 
     st.header("Full Comments Sheet (original + appended)")
     st.dataframe(appended, use_container_width=True)
 
-    # — Download updated CSV —
+    # — Download button —
     buf = StringIO()
     appended.to_csv(buf, index=False)
     st.download_button(
         "📥 Download updated Student Comments CSV",
-        buf.getvalue(),
+        data=buf.getvalue(),
         file_name="Student_Comments_appended.csv",
         mime="text/csv",
         key="download"
