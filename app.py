@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from io import StringIO
 
-# — Helpers to load files with encoding fallback —
+# — Helpers to load with encoding fallback —
 @st.cache_data
 def load_excel(uploader):
     if not uploader:
@@ -23,100 +23,110 @@ def load_csv(uploader):
             return pd.read_csv(uploader, encoding=enc)
         except UnicodeDecodeError:
             continue
-    st.error("Could not decode CSV. Please check file encoding.")
+    st.error("Could not decode CSV. Check file encoding.")
     return pd.DataFrame()
+
+# — Convert raw Term (YYYY_SS_TTn) → human Project string —
+def convert_term(term_str):
+    parts = str(term_str).split("_")
+    if len(parts) != 3:
+        return term_str
+    year, sec, code = parts
+    season = {
+        "SP": "Summer", "SU": "Summer",
+        "FA": "Fall",   "WI": "Winter"
+    }.get(code[:2], code[:2])
+    term_no  = code[2:]
+    return f"{year} {season} Term {term_no} Section {int(sec)}"
 
 def main():
     st.set_page_config(page_title="Merge Instructor → Comments", layout="wide")
     st.title("Merge Instructor Report into Student Comments")
 
-    # — Upload widgets (unique keys) —
     instr_u = st.sidebar.file_uploader(
-        "Instructor Report (Excel)", ["xls", "xlsx"], key="instr"
+        "Instructor Report (Excel)", ["xls","xlsx"], key="instr"
     )
     comm_u  = st.sidebar.file_uploader(
         "Student Comments (CSV)", ["csv"], key="comm"
     )
 
-    instr_df = load_excel(instr_u)
-    comm_df  = load_csv(comm_u)
+    instr_df  = load_excel(instr_u)
+    comments  = load_csv(comm_u)
 
-    if comm_df.empty:
-        st.info("Upload your Student Comments CSV first.")
+    if comments.empty:
+        st.info("Upload your Student Comments CSV to begin.")
         return
     if instr_df.empty:
         st.info("Then upload your Instructor Report Excel.")
         return
 
-    # — 1) Normalize Instructor Report columns to match the Comments file —
-    instr_clean = instr_df.rename(columns={
-        # report → comments-file names
-        "Term":                  "Term",
-        "Course_Co":             "Course_Code",
-        "Course_Code":           "Course_Code",   # in case your file uses this
-        "Course_Na":             "Course_Name",
-        "Course_Title":          "Course_Name",   # or this
-        "Inst_FNam":             "Inst_FName",
-        "Inst_FName":            "Inst_FName",    # or this
-        "Inst_Lnam":             "Inst_LName",
-        "Inst_LName":            "Inst_LName",    # or this
-        "Question":              "Question",
-        "QuestionKey":           "Question",      # if it’s named that
-        "Response":              "Response",      # only if you actually want to override student Response
-        "Comments":              "Response",      # if your report “Comments” maps to student “Response”
-        "Comment_Resolved?":     "Resolved?",
-        "Resolved?":             "Resolved?",
-        "Notes":                 "Notes"
-    })[
-        [
-            "Term",
-            "Course_Code",
-            "Course_Name",
-            "Inst_FName",
-            "Inst_LName",
-            "Question",
-            # only import these two extra columns:
-            "Resolved?",
-            "Notes"
-        ]
-    ].copy()
-
-    # — 2) Truncate Course_Code to first 6 chars (ACC210 etc.) —
-    instr_clean["Course_Code"] = instr_clean["Course_Code"].astype(str).str[:6]
-
-    # — 3) Merge INTO the original comments DataFrame —
-    merge_on = [
-        "Term",
+    # — Normalize columns in each DF so we can join on the same names —
+    # 1) Instructor Report → keys & mapped columns
+    instr = instr_df.rename(columns={
+        "Project":               "Project",
+        "Course Code":           "Course_Code",
+        "Course Title":          "Course_Name",
+        "Instructor Firstname":  "Inst_FName",
+        "Instructor Lastname":   "Inst_LName",
+        "QuestionKey":           "Question",
+        "Comments":              "Response"
+    })[[
+        "Project",
         "Course_Code",
         "Course_Name",
         "Inst_FName",
         "Inst_LName",
         "Question",
+        "Response"
+    ]].copy()
+    # truncate to 6 chars
+    instr["Course_Code"] = instr["Course_Code"].astype(str).str[:6]
+
+    # 2) Student Comments → add a temporary Project column
+    comments = comments.copy()
+    comments["Project"] = comments["Term"].apply(convert_term)
+
+    # — Define merge keys & validate existence —
+    merge_keys = [
+        "Project",
+        "Course_Code",
+        "Course_Name",
+        "Inst_FName",
+        "Inst_LName",
+        "Question"
     ]
-    # validate
-    missing = [c for c in merge_on if c not in comm_df.columns] \
-            + [c for c in merge_on if c not in instr_clean.columns]
+    missing = [k for k in merge_keys if k not in comments.columns] \
+            + [k for k in merge_keys if k not in instr.columns]
     if missing:
         st.error("Missing columns for merge: " + ", ".join(missing))
         return
 
-    merged = comm_df.merge(
-        instr_clean,
-        on=merge_on,
+    # — Merge (left join keeps all student‐comment rows) —
+    merged = pd.merge(
+        comments,
+        instr,
+        on=merge_keys,
         how="left",
         suffixes=("", "_instr")
     )
 
-    # — 4) Overwrite only the two import columns in the original layout —
-    comm_df["Resolved?"] = merged["Resolved?"]
-    comm_df["Notes"]    = merged["Notes"]
+    # — Overwrite only A–G in the original layout —
+    comments["Term"]         = merged["Project"]
+    comments["Course_Code"]  = merged["Course_Code"]
+    comments["Course_Name"]  = merged["Course_Name"]
+    comments["Inst_FName"]   = merged["Inst_FName"]
+    comments["Inst_LName"]   = merged["Inst_LName"]
+    comments["Question"]     = merged["Question"]
+    comments["Response"]     = merged["Response"]
 
-    # — 5) Show a preview & download button —
+    # — Drop our helper column and show a preview —
+    comments = comments.drop(columns=["Project"])
     st.header("Updated Student Comments Preview")
-    st.dataframe(comm_df, use_container_width=True)
+    st.dataframe(comments, use_container_width=True)
 
+    # — Download button —
     buf = StringIO()
-    comm_df.to_csv(buf, index=False)
+    comments.to_csv(buf, index=False)
     st.download_button(
         "📥 Download merged Comments CSV",
         buf.getvalue(),
