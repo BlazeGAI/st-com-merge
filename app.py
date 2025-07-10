@@ -10,8 +10,15 @@ def load_instructor_report(uploaded_file):
 
 @st.cache_data
 def load_student_comments(uploaded_file):
-    if uploaded_file is not None:
-        return pd.read_csv(uploaded_file)
+    if uploaded_file is None:
+        return pd.DataFrame()
+    for enc in ("utf-8", "ISO-8859-1", "latin-1"):
+        try:
+            uploaded_file.seek(0)
+            return pd.read_csv(uploaded_file, encoding=enc)
+        except UnicodeDecodeError:
+            continue
+    st.error("Failed to decode CSV. Please check file encoding.")
     return pd.DataFrame()
 
 # Merge instructor data into comments based on a common key
