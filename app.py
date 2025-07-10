@@ -26,25 +26,23 @@ def load_csv(uploader):
     st.error("Failed to decode Student Comments CSV. Check its encoding.")
     return pd.DataFrame()
 
-# — Format “Term” from Instructor Report into YYYY_01_TTn —
-def format_term(raw):
-    s = str(raw).strip()
-    # Already in YYYY_SS_TTn?
-    if s.count("_") == 2:
-        return s
-    # Expecting “YYYY TTn” (e.g. “2025 SP2”)
-    parts = s.split()
-    if len(parts) == 2:
-        year, code = parts
+# — Convert “Project” (e.g. “2025 Summer Term I”) → “2025_01_SU1” etc. —
+def format_term(proj):
+    parts = str(proj).split()               # ["2025","Summer","Term","I"]
+    if len(parts) == 4:
+        year, season, _, roman = parts
+        # map roman numerals I, II, III → 1,2,3
+        roman_map = {"I":"1","II":"2","III":"3","IV":"4"}
+        num = roman_map.get(roman, roman)
+        season_map = {"Spring":"SP","Summer":"SU","Fall":"FA","Winter":"WI"}
+        code = season_map.get(season, season[:2].upper()) + num
         return f"{year}_01_{code}"
-    # Otherwise, return as-is
-    return s
+    return str(proj)
 
 def main():
     st.set_page_config(page_title="Append Instructor → Comments", layout="wide")
     st.title("Append Instructor Report to Student Comments")
 
-    # Upload widgets
     instr_u = st.sidebar.file_uploader("Instructor Report (Excel)", ["xls","xlsx"], key="instr")
     comm_u  = st.sidebar.file_uploader("Student Comments (CSV)",       ["csv"],      key="comm")
 
@@ -52,49 +50,51 @@ def main():
     comm_df  = load_csv(comm_u)
 
     if comm_df.empty:
-        st.info("Step 1: Upload your Student Comments CSV.")
+        st.info("1) Upload your Student Comments CSV first.")
         return
     if instr_df.empty:
-        st.info("Step 2: Upload your Instructor Report Excel.")
+        st.info("2) Then upload your Instructor Report Excel.")
         return
 
     # — Build new rows from Instructor Report —
-    # Map columns A–G exactly:
-    # A: Term        ← format_term(instr_df['Term'])
-    # B: Course_Code ← first 6 chars of instr_df['Course_Code']
-    # C: Course_Name ← instr_df['Course_Name']
-    # D: Inst_FName  ← instr_df['Inst_FName']
-    # E: Inst_LName  ← instr_df['Inst_LName']
+    # A: Term        ← format_term(instr_df['Project'])
+    # B: Course_Code ← first 6 chars of instr_df['Course Code']
+    # C: Course_Name ← f"{Code}_{UniqueID} {Title}"
+    # D: Inst_FName  ← instr_df['Instructor Firstname']
+    # E: Inst_LName  ← instr_df['Instructor Lastname']
     # F: Question    ← instr_df['QuestionKey']
     # G: Response    ← instr_df['Comments']
-    new_rows = pd.DataFrame({
-        "Term":       instr_df.get("Term",       instr_df.get("Project", ""))\
-                         .apply(format_term),
-        "Course_Code": instr_df["Course_Code"].astype(str).str[:6],
-        "Course_Name": instr_df["Course_Name"].astype(str),
-        "Inst_FName":  instr_df["Inst_FName"].astype(str),
-        "Inst_LName":  instr_df["Inst_LName"].astype(str),
+    new = pd.DataFrame({
+        "Term":        instr_df["Project"].map(format_term),
+        "Course_Code": instr_df["Course Code"].astype(str).str[:6],
+        "Course_Name": instr_df["Course Code"].astype(str)
+                         + "_"
+                         + instr_df["Course UniqueID"].astype(str)
+                         + " "
+                         + instr_df["Course Title"].astype(str),
+        "Inst_FName":  instr_df["Instructor Firstname"].astype(str),
+        "Inst_LName":  instr_df["Instructor Lastname"].astype(str),
         "Question":    instr_df["QuestionKey"].astype(str),
         "Response":    instr_df["Comments"].astype(str),
     })
 
-    # — Ensure new_rows has all other columns (blank) so concat keeps sheet format —
+    # — Preserve every other column (blank for new rows) —
     for col in comm_df.columns:
-        if col not in new_rows.columns:
-            new_rows[col] = ""
+        if col not in new.columns:
+            new[col] = ""
 
-    # — Append to the end, preserving all original rows —
-    updated = pd.concat([comm_df, new_rows[comm_df.columns]], ignore_index=True)
+    # — Append (no in-place edits of original rows) —
+    appended = pd.concat([comm_df, new[comm_df.columns]], ignore_index=True)
 
     st.header("Full Comments Sheet (original + appended)")
-    st.dataframe(updated, use_container_width=True)
+    st.dataframe(appended, use_container_width=True)
 
-    # — Download button for updated CSV —
+    # — Download updated CSV —
     buf = StringIO()
-    updated.to_csv(buf, index=False)
+    appended.to_csv(buf, index=False)
     st.download_button(
         "📥 Download updated Student Comments CSV",
-        data=buf.getvalue(),
+        buf.getvalue(),
         file_name="Student_Comments_appended.csv",
         mime="text/csv",
         key="download"
