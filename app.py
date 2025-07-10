@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from io import StringIO
 
-# — Helpers to load with encoding fallback —
+# — Helpers to load files with fallback encodings —
 @st.cache_data
 def load_excel(uploader):
     if not uploader:
@@ -10,7 +10,7 @@ def load_excel(uploader):
     try:
         return pd.read_excel(uploader)
     except Exception as e:
-        st.error(f"Failed to read Excel: {e}")
+        st.error(f"Failed to read Instructor Report: {e}")
         return pd.DataFrame()
 
 @st.cache_data
@@ -23,114 +23,79 @@ def load_csv(uploader):
             return pd.read_csv(uploader, encoding=enc)
         except UnicodeDecodeError:
             continue
-    st.error("Could not decode CSV. Check file encoding.")
+    st.error("Failed to decode Student Comments CSV. Check its encoding.")
     return pd.DataFrame()
 
-# — Convert raw Term (YYYY_SS_TTn) → human Project string —
-def convert_term(term_str):
-    parts = str(term_str).split("_")
-    if len(parts) != 3:
-        return term_str
-    year, sec, code = parts
-    season = {
-        "SP": "Summer", "SU": "Summer",
-        "FA": "Fall",   "WI": "Winter"
-    }.get(code[:2], code[:2])
-    term_no  = code[2:]
-    return f"{year} {season} Term {term_no} Section {int(sec)}"
+# — Format “Term” from Instructor Report into YYYY_01_TTn —
+def format_term(raw):
+    s = str(raw).strip()
+    # Already in YYYY_SS_TTn?
+    if s.count("_") == 2:
+        return s
+    # Expecting “YYYY TTn” (e.g. “2025 SP2”)
+    parts = s.split()
+    if len(parts) == 2:
+        year, code = parts
+        return f"{year}_01_{code}"
+    # Otherwise, return as-is
+    return s
 
 def main():
-    st.set_page_config(page_title="Merge Instructor → Comments", layout="wide")
-    st.title("Merge Instructor Report into Student Comments")
+    st.set_page_config(page_title="Append Instructor → Comments", layout="wide")
+    st.title("Append Instructor Report to Student Comments")
 
-    instr_u = st.sidebar.file_uploader(
-        "Instructor Report (Excel)", ["xls","xlsx"], key="instr"
-    )
-    comm_u  = st.sidebar.file_uploader(
-        "Student Comments (CSV)", ["csv"], key="comm"
-    )
+    # Upload widgets
+    instr_u = st.sidebar.file_uploader("Instructor Report (Excel)", ["xls","xlsx"], key="instr")
+    comm_u  = st.sidebar.file_uploader("Student Comments (CSV)",       ["csv"],      key="comm")
 
-    instr_df  = load_excel(instr_u)
-    comments  = load_csv(comm_u)
+    instr_df = load_excel(instr_u)
+    comm_df  = load_csv(comm_u)
 
-    if comments.empty:
-        st.info("Upload your Student Comments CSV to begin.")
+    if comm_df.empty:
+        st.info("Step 1: Upload your Student Comments CSV.")
         return
     if instr_df.empty:
-        st.info("Then upload your Instructor Report Excel.")
+        st.info("Step 2: Upload your Instructor Report Excel.")
         return
 
-    # — Normalize columns in each DF so we can join on the same names —
-    # 1) Instructor Report → keys & mapped columns
-    instr = instr_df.rename(columns={
-        "Project":               "Project",
-        "Course Code":           "Course_Code",
-        "Course Title":          "Course_Name",
-        "Instructor Firstname":  "Inst_FName",
-        "Instructor Lastname":   "Inst_LName",
-        "QuestionKey":           "Question",
-        "Comments":              "Response"
-    })[[
-        "Project",
-        "Course_Code",
-        "Course_Name",
-        "Inst_FName",
-        "Inst_LName",
-        "Question",
-        "Response"
-    ]].copy()
-    # truncate to 6 chars
-    instr["Course_Code"] = instr["Course_Code"].astype(str).str[:6]
+    # — Build new rows from Instructor Report —
+    # Map columns A–G exactly:
+    # A: Term        ← format_term(instr_df['Term'])
+    # B: Course_Code ← first 6 chars of instr_df['Course_Code']
+    # C: Course_Name ← instr_df['Course_Name']
+    # D: Inst_FName  ← instr_df['Inst_FName']
+    # E: Inst_LName  ← instr_df['Inst_LName']
+    # F: Question    ← instr_df['QuestionKey']
+    # G: Response    ← instr_df['Comments']
+    new_rows = pd.DataFrame({
+        "Term":       instr_df.get("Term",       instr_df.get("Project", ""))\
+                         .apply(format_term),
+        "Course_Code": instr_df["Course_Code"].astype(str).str[:6],
+        "Course_Name": instr_df["Course_Name"].astype(str),
+        "Inst_FName":  instr_df["Inst_FName"].astype(str),
+        "Inst_LName":  instr_df["Inst_LName"].astype(str),
+        "Question":    instr_df["QuestionKey"].astype(str),
+        "Response":    instr_df["Comments"].astype(str),
+    })
 
-    # 2) Student Comments → add a temporary Project column
-    comments = comments.copy()
-    comments["Project"] = comments["Term"].apply(convert_term)
+    # — Ensure new_rows has all other columns (blank) so concat keeps sheet format —
+    for col in comm_df.columns:
+        if col not in new_rows.columns:
+            new_rows[col] = ""
 
-    # — Define merge keys & validate existence —
-    merge_keys = [
-        "Project",
-        "Course_Code",
-        "Course_Name",
-        "Inst_FName",
-        "Inst_LName",
-        "Question"
-    ]
-    missing = [k for k in merge_keys if k not in comments.columns] \
-            + [k for k in merge_keys if k not in instr.columns]
-    if missing:
-        st.error("Missing columns for merge: " + ", ".join(missing))
-        return
+    # — Append to the end, preserving all original rows —
+    updated = pd.concat([comm_df, new_rows[comm_df.columns]], ignore_index=True)
 
-    # — Merge (left join keeps all student‐comment rows) —
-    merged = pd.merge(
-        comments,
-        instr,
-        on=merge_keys,
-        how="left",
-        suffixes=("", "_instr")
-    )
+    st.header("Full Comments Sheet (original + appended)")
+    st.dataframe(updated, use_container_width=True)
 
-    # — Overwrite only A–G in the original layout —
-    comments["Term"]         = merged["Project"]
-    comments["Course_Code"]  = merged["Course_Code"]
-    comments["Course_Name"]  = merged["Course_Name"]
-    comments["Inst_FName"]   = merged["Inst_FName"]
-    comments["Inst_LName"]   = merged["Inst_LName"]
-    comments["Question"]     = merged["Question"]
-    comments["Response"]     = merged["Response"]
-
-    # — Drop our helper column and show a preview —
-    comments = comments.drop(columns=["Project"])
-    st.header("Updated Student Comments Preview")
-    st.dataframe(comments, use_container_width=True)
-
-    # — Download button —
+    # — Download button for updated CSV —
     buf = StringIO()
-    comments.to_csv(buf, index=False)
+    updated.to_csv(buf, index=False)
     st.download_button(
-        "📥 Download merged Comments CSV",
-        buf.getvalue(),
-        file_name="Student_Comments_merged.csv",
+        "📥 Download updated Student Comments CSV",
+        data=buf.getvalue(),
+        file_name="Student_Comments_appended.csv",
         mime="text/csv",
         key="download"
     )
