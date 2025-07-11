@@ -13,7 +13,7 @@ def load_excel(uploader):
         st.error(f"Failed to read Instructor Report: {e}")
         return pd.DataFrame()
 
-# — Build Term = YYYY_SS_TTn, where SS is derived from the numeric suffix in Course Title —
+# — Build Term = YYYY_SS_TTn using the numeric suffix in Course Title —
 def format_term(project, course_title):
     parts = str(project).split()  # e.g. ["2025","Summer","Term","I"]
     if len(parts) == 4:
@@ -24,17 +24,15 @@ def format_term(project, course_title):
         season_map = {"Spring": "SP", "Summer": "SU", "Fall": "FA"}
         code = season_map.get(season, season[:2].upper()) + term_num
 
-        # extract numeric suffix from "CODE_###" or "CODE_##"
+        # extract numeric suffix from the first token, e.g. "CUL210_191"
         token = str(course_title).split(maxsplit=1)[0]
         suffix = token.split("_")[-1]
         try:
             val = int(suffix)
-            # reduce to last two digits: e.g. 191→91, 90→90
-            last2 = val % 100
+            last2 = val % 100            # e.g. 191 → 91, 90 → 90
             section_num = (last2 - 90) + 1
-            # clamp to at least 1
             section_num = max(section_num, 1)
-        except:
+        except ValueError:
             section_num = 1
         section = f"{section_num:02d}"
 
@@ -51,15 +49,11 @@ def main():
         st.info("Please upload your Instructor Report to begin.")
         return
 
-    # ensure required columns exist
+    # ensure required columns
     required = [
-        "Instructor Firstname",
-        "Instructor Lastname",
-        "Project",
-        "Course Code",
-        "Course Title",
-        "QuestionKey",
-        "Comments"
+        "Instructor Firstname", "Instructor Lastname",
+        "Project", "Course Code", "Course Title",
+        "QuestionKey", "Comments"
     ]
     missing = [c for c in required if c not in df.columns]
     if missing:
@@ -83,7 +77,7 @@ def main():
     # determine download filename
     terms = out["Term"].unique()
     term_code = terms[0] if len(terms) == 1 else "MULTI_TERM"
-    filename = f"{term_code}_Comments_Watermark.csv"
+    filename = f"{term_code}_Student_Comments_Watermark.csv"
 
     buf = StringIO()
     out.to_csv(buf, index=False)
