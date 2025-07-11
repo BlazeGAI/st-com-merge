@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from io import StringIO
 
-# — Helpers to load files with fallback encodings —
+# — Loader for Excel with fallback —
 @st.cache_data
 def load_excel(uploader):
     if not uploader:
@@ -13,85 +13,72 @@ def load_excel(uploader):
         st.error(f"Failed to read Instructor Report: {e}")
         return pd.DataFrame()
 
-@st.cache_data
-def load_csv(uploader):
-    if not uploader:
-        return pd.DataFrame()
-    for enc in ("utf-8", "ISO-8859-1", "latin-1"):
-        try:
-            uploader.seek(0)
-            return pd.read_csv(uploader, encoding=enc)
-        except UnicodeDecodeError:
-            continue
-    st.error("Failed to decode Student Comments CSV. Check its encoding.")
-    return pd.DataFrame()
-
-# — Build the Term string as YYYY_SS_TTn, with SS from Course UniqueID’s last digit —
-def make_term(project_str, uniqueid):
-    year, season, _, roman = str(project_str).split()
-    # Roman → 1/2
-    roman_map  = {"I": "1", "II": "2"}
-    num         = roman_map.get(roman.upper(), "1")
-    # Season → SP/SU/FA/WI
-    season_map = {"Spring":"SP","Summer":"SU","Fall":"FA","Winter":"WI"}
-    code        = season_map.get(season, season[:2].upper()) + num
-    # Section code based on UniqueID’s last digit
-    last_digit = str(uniqueid).strip()[-1]
-    section    = "01" if last_digit == "0" else "02" if last_digit == "1" else f"0{last_digit}"
-    return f"{year}_{section}_{code}"
+# — Build Term as YYYY_SS_TTn using UniqueID’s last digit —
+def format_term(project, uniqueid):
+    # project: “2025 Summer Term I”, uniqueid: e.g. “190” or “191”
+    parts = str(project).split()
+    if len(parts) == 4:
+        year, season, _, roman = parts
+        # I/II → 1/2
+        roman_map  = {"I":"1","II":"2"}
+        num        = roman_map.get(roman.upper(), "1")
+        # Spring/Summer/Fall/Winter → SP/SU/FA/WI
+        season_map = {"Spring":"SP","Summer":"SU","Fall":"FA","Winter":"WI"}
+        code       = season_map.get(season, season[:2].upper()) + num
+        # UniqueID’s last digit → section 01 if 0, 02 if 1
+        last       = str(uniqueid).strip()[-1]
+        section    = "01" if last == "0" else "02" if last == "1" else f"{int(last):02d}"
+        return f"{year}_{section}_{code}"
+    return str(project)
 
 def main():
-    st.set_page_config(page_title="Append Instructor → Comments", layout="wide")
-    st.title("Append Instructor Report to Student Comments")
+    st.set_page_config(page_title="Reformat Instructor Report", layout="wide")
+    st.title("Reformat Instructor Report → Student Comments CSV")
 
-    instr_u = st.sidebar.file_uploader("Instructor Report (Excel)", ["xls","xlsx"], key="instr")
-    comm_u  = st.sidebar.file_uploader("Student Comments (CSV)",       ["csv"],      key="comm")
-
-    instr_df = load_excel(instr_u)
-    comm_df  = load_csv(comm_u)
-
-    if comm_df.empty:
-        st.info("1) Upload your Student Comments CSV first.")
-        return
-    if instr_df.empty:
-        st.info("2) Then upload your Instructor Report Excel.")
+    instr_file = st.file_uploader(
+        "Upload Instructor Report (Excel)",
+        type=["xls", "xlsx"],
+        key="instr"
+    )
+    df = load_excel(instr_file)
+    if df.empty:
+        st.info("Please upload your Instructor Report to begin.")
         return
 
-    # — Build only columns A–G from Instructor Report —
-    new = pd.DataFrame({
-        "Term":        instr_df.apply(lambda r: make_term(r["Project"], r["Course UniqueID"]), axis=1),
-        "Course_Code": instr_df["Course Code"].astype(str).str[:6],
-        "Course_Name": instr_df["Course Code"].astype(str).str[:6]
-                         + "_" 
-                         + instr_df["Course UniqueID"].astype(str)
-                         + " "
-                         + instr_df["Course Title"].astype(str),
-        "Inst_FName":  instr_df["Instructor Firstname"].astype(str),
-        "Inst_LName":  instr_df["Instructor Lastname"].astype(str),
-        "Question":    instr_df["QuestionKey"].astype(str),
-        "Response":    instr_df["Comments"].astype(str),
+    # make sure we have the columns you listed
+    required = [
+        "Instructor Firstname", "Instructor Lastname",
+        "Project", "Course Code", "Course Title",
+        "Course UniqueID", "QuestionKey", "Comments"
+    ]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        st.error("Missing columns in Report: " + ", ".join(missing))
+        return
+
+    # build the new table
+    out = pd.DataFrame({
+        "Term":          df.apply(lambda r: format_term(r["Project"], r["Course UniqueID"]), axis=1),
+        "Course_Code":   df["Course Code"].astype(str).str[:6],
+        "Course_Name":   df["Course Title"].astype(str).str.strip(),
+        "Inst_FName":    df["Instructor Firstname"].astype(str).str.strip(),
+        "Inst_LName":    df["Instructor Lastname"].astype(str).str.strip(),
+        "Question":      df["QuestionKey"].astype(str),
+        "Response":      df["Comments"].astype(str),
+        "Comment_Type":  ""  # blank by default
     })
 
-    # — Pad out any extra columns so concat keeps your sheet’s layout —
-    for col in comm_df.columns:
-        if col not in new.columns:
-            new[col] = ""
+    st.header("Preview of Reformatted CSV")
+    st.dataframe(out, use_container_width=True)
 
-    # — Append without touching the original rows —
-    appended = pd.concat([comm_df, new[comm_df.columns]], ignore_index=True)
-
-    st.header("Full Comments Sheet (original + appended)")
-    st.dataframe(appended, use_container_width=True)
-
-    # — Download button —
+    # download button
     buf = StringIO()
-    appended.to_csv(buf, index=False)
+    out.to_csv(buf, index=False)
     st.download_button(
-        "📥 Download updated Student Comments CSV",
-        data=buf.getvalue(),
-        file_name="Student_Comments_appended.csv",
-        mime="text/csv",
-        key="download"
+        "📥 Download reformatted CSV",
+        buf.getvalue(),
+        file_name="Instructor_As_StudentComments.csv",
+        mime="text/csv"
     )
 
 if __name__ == "__main__":
