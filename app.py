@@ -18,7 +18,9 @@ def format_term(project, course_title):
     parts = str(project).split()  # e.g. ["2025","Summer","Term","I"]
     if len(parts) == 4:
         year, season, _, roman = parts
+        # map I/II → 1/2
         term_num   = {"I":"1","II":"2"}.get(roman.upper(),"1")
+        # map season → SP/SU/FA
         season_map = {"Spring":"SP","Summer":"SU","Fall":"FA"}
         code       = season_map.get(season, season[:2].upper()) + term_num
 
@@ -71,11 +73,13 @@ def main():
     st.header("Preview")
     st.dataframe(out, use_container_width=True)
 
-    # determine download filename (omit section number in the name)
-    unique_terms = out["Term"].unique()
-    raw_term = unique_terms[0] if len(unique_terms) == 1 else "MULTI_TERM"
-    parts = raw_term.split("_")          # ["2025","02","SU1"]
-    filename_term = f"{parts[0]}_{parts[-1]}" if len(parts) == 3 else raw_term  # "2025_SU1"
+    # determine download filename based on first Term (omit section)
+    first_term = out["Term"].iloc[0]
+    parts = first_term.split("_")        # ["2025","02","SU1"]
+    if len(parts) == 3:
+        filename_term = f"{parts[0]}_{parts[2]}"  # "2025_SU1"
+    else:
+        filename_term = first_term
     filename = f"{filename_term}_Student_Comments_Watermark.csv"
 
     buf = StringIO()
