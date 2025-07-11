@@ -22,8 +22,7 @@ def format_term(project, uniqueid):
         code = {
             "Spring":"SP", "Summer":"SU", "Fall":"FA"
         }.get(season, season[:2].upper()) + n
-        uid = str(uniqueid).strip()
-        last = uid[-1] if uid else ""
+        last = str(uniqueid).strip()[-1] if pd.notna(uniqueid) else ""
         section = "01" if last=="0" else "02" if last=="1" else "01"
         return f"{year}_{section}_{code}"
     return str(project)
@@ -32,28 +31,28 @@ def main():
     st.set_page_config(page_title="Reformat Instructor Report", layout="wide")
     st.title("Reformat Instructor Report → Student Comments CSV")
 
-    instr = st.file_uploader(
+    instr_file = st.file_uploader(
         "Upload Instructor Report (Excel)",
         type=["xls","xlsx"],
         key="instr"
     )
-    df = load_excel(instr)
+    df = load_excel(instr_file)
     if df.empty:
         st.info("Please upload your Instructor Report to begin.")
         return
 
-    # ensure required columns exist
-    req = [
+    # validate columns
+    required = [
         "Instructor Firstname","Instructor Lastname",
         "Project","Course Code","Course Title",
         "Course UniqueID","QuestionKey","Comments"
     ]
-    missing = [c for c in req if c not in df.columns]
+    missing = [c for c in required if c not in df.columns]
     if missing:
         st.error("Missing columns in Report: " + ", ".join(missing))
         return
 
-    # build the reformatted DataFrame
+    # build reformatted table with new columns
     out = pd.DataFrame({
         "Term":         df.apply(lambda r: format_term(r["Project"], r["Course UniqueID"]), axis=1),
         "Course_Code":  df["Course Code"].astype(str).str[:6],
@@ -62,18 +61,21 @@ def main():
         "Inst_LName":   df["Instructor Lastname"].astype(str).str.strip(),
         "Question":     df["QuestionKey"].astype(str),
         "Response":     df["Comments"].astype(str),
-        "Comment_Type": "",          # blank
-        "Resolved?":    False,       # default FALSE
-        "Notes":        ""           # blank
+        "Comment_Type": "",
+        "Resolved?":    "FALSE",
+        "Notes":        ""
     })
 
     st.header("Preview of Reformatted CSV")
     st.dataframe(out, use_container_width=True)
 
-    # derive the file name from the first Term
-    term_vals = out["Term"].unique()
-    term_name = term_vals[0] if len(term_vals) == 1 else term_vals[0]
-    filename = f"{term_name}_Comments_Watermark.csv"
+    # determine filename based on term
+    terms = out["Term"].unique()
+    if len(terms) == 1:
+        term_code = terms[0]
+    else:
+        term_code = "MULTI_TERM"
+    filename = f"{term_code}_Comments_Watermark.csv"
 
     # download button
     buf = StringIO()
