@@ -13,22 +13,30 @@ def load_excel(uploader):
         st.error(f"Failed to read Instructor Report: {e}")
         return pd.DataFrame()
 
-# — Build Term = YYYY_SS_TTn, using the numeric suffix in Course Title —
+# — Build Term = YYYY_SS_TTn, where SS is derived from the numeric suffix in Course Title —
 def format_term(project, course_title):
-    # project: "2025 Summer Term I"
-    parts = str(project).split()
+    parts = str(project).split()  # e.g. ["2025","Summer","Term","I"]
     if len(parts) == 4:
         year, season, _, roman = parts
-        n = {"I": "1", "II": "2"}.get(roman.upper(), "1")
+        # map I/II → 1/2
+        term_num = {"I": "1", "II": "2"}.get(roman.upper(), "1")
+        # map season → SP/SU/FA
         season_map = {"Spring": "SP", "Summer": "SU", "Fall": "FA"}
-        code = season_map.get(season, season[:2].upper()) + n
+        code = season_map.get(season, season[:2].upper()) + term_num
 
-        # extract section-id from title, e.g. "CUL210_191 Comparative Cultures"
-        first_token = str(course_title).split(maxsplit=1)[0]
-        # assume format CODE_UNIQUEID
-        uniqueid = first_token.split("_")[-1]
-        last = uniqueid[-1] if uniqueid.isdigit() else "0"
-        section = "01" if last == "0" else "02"
+        # extract numeric suffix from "CODE_###" or "CODE_##"
+        token = str(course_title).split(maxsplit=1)[0]
+        suffix = token.split("_")[-1]
+        try:
+            val = int(suffix)
+            # reduce to last two digits: e.g. 191→91, 90→90
+            last2 = val % 100
+            section_num = (last2 - 90) + 1
+            # clamp to at least 1
+            section_num = max(section_num, 1)
+        except:
+            section_num = 1
+        section = f"{section_num:02d}"
 
         return f"{year}_{section}_{code}"
     return str(project)
@@ -43,24 +51,26 @@ def main():
         st.info("Please upload your Instructor Report to begin.")
         return
 
-    # required columns
-    req = [
-        "Instructor Firstname", "Instructor Lastname",
-        "Project", "Course Code", "Course Title",
-        "QuestionKey", "Comments"
+    # ensure required columns exist
+    required = [
+        "Instructor Firstname",
+        "Instructor Lastname",
+        "Project",
+        "Course Code",
+        "Course Title",
+        "QuestionKey",
+        "Comments"
     ]
-    missing = [c for c in req if c not in df.columns]
+    missing = [c for c in required if c not in df.columns]
     if missing:
         st.error("Missing columns in report: " + ", ".join(missing))
         return
 
-    # build reformatted table
+    # build the reformatted table
     out = pd.DataFrame({
         "Term":        df.apply(lambda r: format_term(r["Project"], r["Course Title"]), axis=1),
         "Course_Code": df["Course Code"].astype(str).str[:6],
-        "Course_Name": df["Course Title"].astype(str).apply(
-                          lambda s: s.split(" ",1)[1] if " " in s else ""
-                       ).str.strip(),
+        "Course_Name": df["Course Title"].astype(str).apply(lambda s: s.split(" ",1)[1].strip() if " " in s else ""),
         "Inst_FName":  df["Instructor Firstname"].astype(str).str.strip(),
         "Inst_LName":  df["Instructor Lastname"].astype(str).str.strip(),
         "Question":    df["QuestionKey"].astype(str),
@@ -70,12 +80,11 @@ def main():
     st.header("Preview")
     st.dataframe(out, use_container_width=True)
 
-    # determine filename
+    # determine download filename
     terms = out["Term"].unique()
-    term_code = terms[0] if len(terms)==1 else "MULTI_TERM"
+    term_code = terms[0] if len(terms) == 1 else "MULTI_TERM"
     filename = f"{term_code}_Comments_Watermark.csv"
 
-    # download button
     buf = StringIO()
     out.to_csv(buf, index=False)
     st.download_button(
