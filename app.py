@@ -20,15 +20,14 @@ def format_term(project, course_title):
         year, season, _, roman = parts
         term_num   = {"I":"1","II":"2"}.get(roman.upper(),"1")
         season_map = {"Spring":"SP","Summer":"SU","Fall":"FA"}
-        code       = season_map.get(season,season[:2].upper()) + term_num
+        code       = season_map.get(season, season[:2].upper()) + term_num
 
-        # extract numeric suffix from CODE_### or CODE_##
+        # extract numeric suffix from first token, e.g. "CUL210_191"
         token  = str(course_title).split(maxsplit=1)[0]
         suffix = token.split("_")[-1]
         try:
             val = int(suffix)
-            last2 = val % 100        # e.g. 191→91, 90→90
-            # number of sections = last2 - 90 + 1
+            last2 = val % 100            # e.g. 191→91, 90→90
             section_num = max(last2 - 90 + 1, 1)
         except ValueError:
             section_num = 1
@@ -47,16 +46,18 @@ def main():
         st.info("Please upload your Instructor Report to begin.")
         return
 
+    # ensure required columns exist
     required = [
-        "Instructor Firstname","Instructor Lastname",
-        "Project","Course Code","Course Title",
-        "QuestionKey","Comments"
+        "Instructor Firstname", "Instructor Lastname",
+        "Project", "Course Code", "Course Title",
+        "QuestionKey", "Comments"
     ]
     missing = [c for c in required if c not in df.columns]
     if missing:
         st.error("Missing columns in report: " + ", ".join(missing))
         return
 
+    # build the reformatted table
     out = pd.DataFrame({
         "Term":        df.apply(lambda r: format_term(r["Project"], r["Course Title"]), axis=1),
         "Course_Code": df["Course Code"].astype(str).str[:6],
@@ -70,11 +71,11 @@ def main():
     st.header("Preview")
     st.dataframe(out, use_container_width=True)
 
-    # build filename term as YYYY_TTn (omit section)
+    # determine download filename (omit section number in the name)
     unique_terms = out["Term"].unique()
-    raw = unique_terms[0] if len(unique_terms)==1 else "MULTI_TERM"
-    parts = raw.split("_")
-    filename_term = f"{parts[0]}_{parts[-1]}" if len(parts)==3 else raw
+    raw_term = unique_terms[0] if len(unique_terms) == 1 else "MULTI_TERM"
+    parts = raw_term.split("_")          # ["2025","02","SU1"]
+    filename_term = f"{parts[0]}_{parts[-1]}" if len(parts) == 3 else raw_term  # "2025_SU1"
     filename = f"{filename_term}_Student_Comments_Watermark.csv"
 
     buf = StringIO()
