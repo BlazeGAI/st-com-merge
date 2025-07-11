@@ -56,7 +56,7 @@ def main():
         st.error("Missing columns in report: " + ", ".join(missing))
         return
 
-    # build reformatted table
+    # build reformatted table (no Comment_Type column)
     out = pd.DataFrame({
         "Term":         df.apply(lambda r: format_term(r["Project"], r["Course UniqueID"]), axis=1),
         "Course_Code":  df["Course Code"].astype(str).str[:6],
@@ -64,8 +64,7 @@ def main():
         "Inst_FName":   df["Instructor Firstname"].astype(str).str.strip(),
         "Inst_LName":   df["Instructor Lastname"].astype(str).str.strip(),
         "Question":     df["QuestionKey"].astype(str),
-        "Response":     df["Comments"].astype(str),
-        "Comment_Type": ""
+        "Response":     df["Comments"].astype(str)
     })
 
     st.header("Preview of Reformatted CSV")
